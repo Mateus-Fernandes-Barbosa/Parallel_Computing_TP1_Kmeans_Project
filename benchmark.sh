@@ -1,156 +1,243 @@
 #!/bin/bash
+# benchmark2.sh - Benchmarks: Sequencial, OpenMP, MPI+OpenMP (works1) e teste2
 
-# Script de Benchmark e Comparação K-Means
-# Uso: ./benchmark.sh [arquivo_entrada]
-
-# Cores para output
+# ==============================
+# Estilo/cores (igual ao benchmark.sh)
+# ==============================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Arquivo de entrada (padrão: medium_30k_input.txt)
-INPUT_FILE=${1:-UCI_Credit_Card.txt}
+# ==============================
+# Entrada e diretórios
+# ==============================
+RAW_INPUT=${1:-UCI_Credit_Card.txt}
+# Tenta ajustar caminho automaticamente se o arquivo não estiver na raiz
+if [ ! -f "$RAW_INPUT" ] && [ -f "databases/$RAW_INPUT" ]; then
+    INPUT_FILE="databases/$RAW_INPUT"
+else
+    INPUT_FILE="$RAW_INPUT"
+fi
 
-# Verifica se o arquivo de entrada existe
 if [ ! -f "$INPUT_FILE" ]; then
-    echo -e "${RED}❌ Erro: Arquivo $INPUT_FILE não encontrado!${NC}"
+    echo -e "${RED}❌ Erro: Arquivo de entrada '$INPUT_FILE' não encontrado.${NC}"
+    echo -e "${YELLOW}Dica:${NC} passe um caminho válido ou coloque o arquivo em ./databases/"
     exit 1
 fi
 
+OUTPUT_DIR="./outputs"
+mkdir -p "$OUTPUT_DIR"
+
+# ==============================
+# Configurações de execução (EDITÁVEIS)
+# ==============================
+# OpenMP threads (apenas threads, sem MPI)
+OPENMP_THREADS=(1 2 4 8)
+# kmeans_mpi_openmp: arrays de processos e threads para testar diferentes combinações
+MPI_OPENMP_PROCESSES=(1 1 1 2 4)
+MPI_OPENMP_THREADS=(1 2 4 2 1)
+# Exemplo: executa (1p,1t), (1p,2t), (1p,4t), (2p,2t), (4p,1t)
+
+# ==============================
+# Banners
+# ==============================
 echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║      BENCHMARK K-MEANS - SEQUENCIAL vs PARALELO        ║${NC}"
+echo -e "${BLUE}║      BENCHMARK K-MEANS - SEQ | OMP | MPI+OMP           ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
-echo ""
 echo -e "${YELLOW}📁 Arquivo de entrada:${NC} $INPUT_FILE"
-echo ""
 
-# Compila os programas se necessário
-echo -e "${YELLOW}🔨 Verificando compilação...${NC}"
-if [ ! -f "kmeans_sequencial" ] || [ "kmeans_sequencial.cpp" -nt "kmeans_sequencial" ]; then
-    echo "   Compilando versão sequencial..."
-    g++ -std=c++17 -o kmeans_sequencial kmeans_sequencial.cpp -lm
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ Erro na compilação do sequencial${NC}"
-        exit 1
-    fi
-fi
+# ==============================
+# Compilação (na ordem solicitada)
+# ==============================
+echo -e "\n${YELLOW}🔨 Compilando binários...${NC}"
 
-if [ ! -f "kmeans_openmp" ] || [ "kmeans_openmp.cpp" -nt "kmeans_openmp" ]; then
-    echo "   Compilando versão paralela..."
-    g++ -std=c++17 -fopenmp -o kmeans_openmp kmeans_openmp.cpp -lm
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ Erro na compilação do OpenMP${NC}"
-        exit 1
-    fi
-fi
+echo -e "  • ${BLUE}1) kmeans_sequencial${NC}"
+g++ -std=c++17 -O0 -o kmeans_sequencial kmeans_sequencial.cpp -lm || { echo -e "${RED}❌ Falha ao compilar kmeans_sequencial.cpp${NC}"; exit 1; }
+
+echo -e "  • ${BLUE}2) kmeans_openmp${NC}"
+g++ -std=c++17 -O0 -fopenmp -o kmeans_openmp kmeans_openmp.cpp -lm || { echo -e "${RED}❌ Falha ao compilar kmeans_openmp.cpp${NC}"; exit 1; }
+
+echo -e "  • ${BLUE}3) kmeans_mpi_openmp (MPI+OpenMP)${NC}"
+mpicxx -std=c++17 -O0 -fopenmp -o kmeans_mpi_openmp kmeans_mpi_openmp.cpp -lm || { echo -e "${RED}❌ Falha ao compilar kmeans_mpi_openmp.cpp${NC}"; exit 1; }
+
 echo -e "${GREEN}   ✅ Compilação OK${NC}"
-echo ""
 
-# Executa versão sequencial
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}⏱️  Executando SEQUENCIAL...${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-TIME_SEQ=$( { time ./kmeans_sequencial output_seq.txt < $INPUT_FILE 2>&1; } 2>&1 | grep real | awk '{print $2}')
-echo -e "${GREEN}✅ Concluído em: $TIME_SEQ${NC}"
-echo ""
-
-# Executa versão paralela com diferentes números de threads
-THREADS_LIST=(1 2 4 8)
-declare -A TIME_PAR
-
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}⏱️  Executando PARALELO (OpenMP)...${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-for threads in "${THREADS_LIST[@]}"; do
-    echo -e "${YELLOW}   🔧 Com $threads thread(s)...${NC}"
-    TIME_PAR[$threads]=$( { time OMP_NUM_THREADS=$threads ./kmeans_openmp output_omp_${threads}t.txt < $INPUT_FILE 2>&1; } 2>&1 | grep real | awk '{print $2}')
-    echo -e "${GREEN}   ✅ Concluído em: ${TIME_PAR[$threads]}${NC}"
-done
-echo ""
-
-# Compara os resultados (centróides)
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}🔍 Verificando corretude dos resultados...${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-grep "Cluster values:" output_seq.txt | sort > centroids_seq_bench.txt
-
-ALL_CORRECT=true
-for threads in "${THREADS_LIST[@]}"; do
-    grep "Cluster values:" output_omp_${threads}t.txt | sort > centroids_omp_${threads}t_bench.txt
-    
-    if diff -q centroids_seq_bench.txt centroids_omp_${threads}t_bench.txt > /dev/null 2>&1; then
-        echo -e "${GREEN}   ✅ OpenMP ($threads threads): Centróides IDÊNTICOS${NC}"
-    else
-        echo -e "${RED}   ❌ OpenMP ($threads threads): DIFERENÇA encontrada!${NC}"
-        ALL_CORRECT=false
-    fi
-done
-echo ""
-
-# Calcula speedup
-echo -e "${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║                  RESUMO DE PERFORMANCE                 ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
-echo ""
-
-# Converte tempo para segundos para cálculo
-time_to_seconds() {
-    local time_str=$1
-    # Remove 'm' e 's', substitui vírgula por ponto e converte para segundos
-    local minutes=$(echo $time_str | sed 's/m.*//')
-    local seconds=$(echo $time_str | sed 's/.*m//;s/s//;s/,/./')
-    echo "$minutes * 60 + $seconds" | bc -l
+# ==============================
+# Funções auxiliares
+# ==============================
+measure_time() {
+    local CMD=$1
+    local START END
+    START=$(date +%s.%N)
+    eval "$CMD"
+    local STATUS=$?
+    END=$(date +%s.%N)
+    local DIFF=$(echo "$END - $START" | bc)
+    echo "$DIFF $STATUS"
 }
 
-SEQ_SECONDS=$(time_to_seconds $TIME_SEQ)
-
-printf "${YELLOW}%-20s${NC} ${BLUE}%-12s${NC} ${GREEN}%-12s${NC}\n" "Configuração" "Tempo" "Speedup"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-printf "%-20s %-12s ${GREEN}%-12s${NC}\n" "Sequencial" "$TIME_SEQ" "1.00x"
-
-for threads in "${THREADS_LIST[@]}"; do
-    PAR_SECONDS=$(time_to_seconds ${TIME_PAR[$threads]})
-    SPEEDUP=$(echo "scale=2; $SEQ_SECONDS / $PAR_SECONDS" | bc -l)
-    printf "%-20s %-12s ${GREEN}%-12s${NC}\n" "OpenMP ($threads threads)" "${TIME_PAR[$threads]}" "${SPEEDUP}x"
-done
-echo ""
-
-# Resultado final
-if [ "$ALL_CORRECT" = true ]; then
-    echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  ✅ TODOS OS RESULTADOS ESTÃO CORRETOS E IDÊNTICOS!    ║${NC}"
-    echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
-else
-    echo -e "${RED}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║  ❌ ATENÇÃO: DIFERENÇAS ENCONTRADAS NOS RESULTADOS!    ║${NC}"
-    echo -e "${RED}╚════════════════════════════════════════════════════════╝${NC}"
-fi
-echo ""
-
-# Melhor speedup
-BEST_THREADS=1
-BEST_SPEEDUP=1.00
-for threads in "${THREADS_LIST[@]}"; do
-    PAR_SECONDS=$(time_to_seconds ${TIME_PAR[$threads]})
-    SPEEDUP=$(echo "scale=2; $SEQ_SECONDS / $PAR_SECONDS" | bc -l)
-    BETTER=$(echo "$SPEEDUP > $BEST_SPEEDUP" | bc -l)
-    if [ "$BETTER" -eq 1 ]; then
-        BEST_SPEEDUP=$SPEEDUP
-        BEST_THREADS=$threads
+# Compara centróides (linhas "Cluster values:") entre 2 arquivos
+compare_centroids() {
+    local A=$1
+    local B=$2
+    local TMPA="$OUTPUT_DIR/.cmp_$(basename "$A").txt"
+    local TMPB="$OUTPUT_DIR/.cmp_$(basename "$B").txt"
+    grep "Cluster values:" "$A" | sort > "$TMPA" 2>/dev/null
+    grep "Cluster values:" "$B" | sort > "$TMPB" 2>/dev/null
+    if diff -q "$TMPA" "$TMPB" >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
     fi
+}
+
+highlight_check() {
+    local OK=$1
+    local LABEL=$2
+    if [ "$OK" -eq 0 ]; then
+        echo -e "    ${GREEN}✅ $LABEL${NC}"
+    else
+        echo -e "    ${RED}❌ $LABEL${NC}"
+    fi
+}
+
+# ==============================
+# Execuções
+# ==============================
+declare -A TIMES
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⏱️  Executando SEQUENCIAL...${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+SEQ_OUT="$OUTPUT_DIR/out_seq.txt"
+read TIME_SEQ STATUS < <(measure_time "./kmeans_sequencial \"$SEQ_OUT\" < \"$INPUT_FILE\"")
+TIMES[seq]="$TIME_SEQ"
+if [ "$STATUS" -ne 0 ]; then echo -e "${RED}❌ Falha na execução sequencial${NC}"; exit 1; fi
+echo -e "${GREEN}✅ Concluído em: ${TIME_SEQ}s${NC}"
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⏱️  Executando OpenMP (${OPENMP_THREADS[@]} threads)...${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+for T in "${OPENMP_THREADS[@]}"; do
+    OMP_OUT="$OUTPUT_DIR/out_openmp_${T}t.txt"
+    echo -e "${YELLOW}   🔧 ${T} thread(s)${NC}"
+    read TTIME STATUS < <(measure_time "OMP_NUM_THREADS=${T} ./kmeans_openmp \"$OMP_OUT\" < \"$INPUT_FILE\"")
+    TIMES[omp_${T}]="$TTIME"
+    if [ "$STATUS" -ne 0 ]; then echo -e "${RED}   ❌ Falha no OpenMP (${T}t)${NC}"; exit 1; fi
+    echo -e "${GREEN}   ✅ Tempo: ${TTIME}s${NC}"
 done
 
-echo -e "${BLUE}🏆 Melhor resultado: ${GREEN}${BEST_SPEEDUP}x de speedup com $BEST_THREADS thread(s)${NC}"
-echo ""
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⏱️  Executando kmeans_mpi_openmp (MPI+OpenMP)...${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
+    P=${MPI_OPENMP_PROCESSES[$i]}
+    T=${MPI_OPENMP_THREADS[$i]}
+    MPI_OPENMP_OUT="$OUTPUT_DIR/out_mpi_openmp_${P}p_${T}t.txt"
+    echo -e "${YELLOW}   🔧 ${P} processo(s), ${T} thread(s)${NC}"
+    read TTIME STATUS < <(measure_time "OMP_NUM_THREADS=${T} mpirun -np ${P} ./kmeans_mpi_openmp \"$MPI_OPENMP_OUT\" < \"$INPUT_FILE\"")
+    TIMES[mpi_openmp_${P}p_${T}t]="$TTIME"
+    if [ "$STATUS" -ne 0 ]; then echo -e "${RED}   ❌ Falha no kmeans_mpi_openmp (${P}p, ${T}t)${NC}"; exit 1; fi
+    echo -e "${GREEN}   ✅ Tempo: ${TTIME}s${NC}"
+done
 
-# Limpeza opcional
-read -p "Deseja remover os arquivos de saída? (s/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Ss]$ ]]; then
-    rm -f output_seq.txt output_omp_*t.txt centroids_*_bench.txt
-    echo -e "${GREEN}✅ Arquivos de saída removidos${NC}"
-fi
+# ==============================
+# Verificação de corretude
+# ==============================
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}🔍 Verificando corretude (centróides)${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# Baselines: sequencial e OpenMP com 1 thread
+SEQ_OUT="$OUTPUT_DIR/out_seq.txt"
+OMP1_OUT="$OUTPUT_DIR/out_openmp_1t.txt"
+
+# Comparar omp 1t com seq
+echo -e "${BLUE}• OpenMP (1 thread) vs Sequencial${NC}"
+compare_centroids "$OMP1_OUT" "$SEQ_OUT"; highlight_check $? "Centroides idênticos (omp 1t ↔ seq)"
+
+# Função para testar um arquivo contra ambos baselines
+check_against_baselines() {
+    local FILE=$1
+    local LABEL=$2
+    echo -e "${BLUE}• $LABEL${NC}"
+    compare_centroids "$FILE" "$SEQ_OUT"; local A=$?
+    compare_centroids "$FILE" "$OMP1_OUT"; local B=$?
+    highlight_check $A "Comparação com Sequencial"
+    highlight_check $B "Comparação com OpenMP (1 thread)"
+}
+
+# Checar OpenMP: comparar todos exceto o primeiro com Sequencial e OpenMP (1 thread)
+for T in "${OPENMP_THREADS[@]:1}"; do  # pula o primeiro elemento
+    check_against_baselines "$OUTPUT_DIR/out_openmp_${T}t.txt" "OpenMP (${T} threads)"
+done
+
+# Checar kmeans_mpi_openmp: comparar todas as configurações exceto a primeira  
+MPI_OPENMP_BASELINE_P=${MPI_OPENMP_PROCESSES[0]}
+MPI_OPENMP_BASELINE_T=${MPI_OPENMP_THREADS[0]}
+MPI_OPENMP_BASELINE_FILE="$OUTPUT_DIR/out_mpi_openmp_${MPI_OPENMP_BASELINE_P}p_${MPI_OPENMP_BASELINE_T}t.txt"
+
+for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
+    if [ $i -eq 0 ]; then continue; fi  # pula baseline (primeira configuração)
+    P=${MPI_OPENMP_PROCESSES[$i]}
+    T=${MPI_OPENMP_THREADS[$i]}
+    FILE="$OUTPUT_DIR/out_mpi_openmp_${P}p_${T}t.txt"
+    echo -e "${BLUE}• kmeans_mpi_openmp (${P}p, ${T}t)${NC}"
+    compare_centroids "$FILE" "$SEQ_OUT"; highlight_check $? "Comparação com Sequencial"
+    compare_centroids "$FILE" "$MPI_OPENMP_BASELINE_FILE"; highlight_check $? "Comparação com mpi_openmp baseline (${MPI_OPENMP_BASELINE_P}p, ${MPI_OPENMP_BASELINE_T}t)"
+done
+
+# ==============================
+# Resumo simples de tempos
+# ==============================
+echo -e "\n${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║                  RESUMO DE TEMPOS (s)                  ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
+printf "%-36s %s\n" "Sequencial" "${TIMES[seq]}"
+for T in "${OPENMP_THREADS[@]}"; do 
+    printf "%-36s %s\n" "OpenMP (${T}t)" "${TIMES[omp_${T}]}"
+done
+
+for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
+    P=${MPI_OPENMP_PROCESSES[$i]}
+    T=${MPI_OPENMP_THREADS[$i]}
+    printf "%-36s %s\n" "kmeans_mpi_openmp (${P}p, ${T}t)" "${TIMES[mpi_openmp_${P}p_${T}t]}"
+done
+
+# ==============================
+# Speedup vs Sequencial
+# ==============================
+echo -e "\n${BLUE}╔════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║                     RESUMO DE SPEEDUP                  ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"
+
+SEQ_T="${TIMES[seq]}"
+calc_speedup() {
+    local base=$1; local t=$2
+    if [ -z "$base" ] || [ -z "$t" ]; then echo "-"; return; fi
+    echo "scale=4; $base / $t" | bc -l
+}
+
+best_label="Sequencial"
+best_speed=1.0
+
+printf "%-36s %s\n" "Sequencial" "1.00x"
+for T in "${OPENMP_THREADS[@]}"; do
+    sp=$(calc_speedup "$SEQ_T" "${TIMES[omp_${T}]}")
+    printf "%-36s %s\n" "OpenMP (${T} threads)" "${sp}x"
+    if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="OpenMP (${T} threads)"; fi
+done
+
+for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
+    P=${MPI_OPENMP_PROCESSES[$i]}
+    T=${MPI_OPENMP_THREADS[$i]}
+    sp=$(calc_speedup "$SEQ_T" "${TIMES[mpi_openmp_${P}p_${T}t]}")
+    printf "%-36s %s\n" "kmeans_mpi_openmp (${P}p, ${T}t)" "${sp}x"
+    if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="kmeans_mpi_openmp (${P}p, ${T}t)"; fi
+done
+
+echo -e "\n${BLUE}🏆 Melhor resultado:${NC} ${GREEN}${best_speed}x${NC} com ${YELLOW}${best_label}${NC}"
+
+echo -e "\n${GREEN}Saídas salvas em:${NC} $OUTPUT_DIR"
