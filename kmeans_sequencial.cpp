@@ -259,7 +259,7 @@ public:
 
 			if(done == true || iter >= max_iterations)
 			{
-				out << "Break in iteration " << iter << "\n\n";
+				// out << "Break in iteration " << iter << "\n\n";
 				break;
 			}
 
@@ -271,20 +271,20 @@ public:
 		{
 			int total_points_cluster =  clusters[i].getTotalPoints();
 
-			out << "Cluster " << clusters[i].getID() + 1 << endl;
-			for(int j = 0; j < total_points_cluster; j++)
-			{
-				out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
-				for(int p = 0; p < total_values; p++)
-					out << clusters[i].getPoint(j).getValue(p) << " ";
+			// out << "Cluster " << clusters[i].getID() + 1 << endl;
+			// for(int j = 0; j < total_points_cluster; j++)
+			// {
+			// 	out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
+			// 	for(int p = 0; p < total_values; p++)
+			// 		out << clusters[i].getPoint(j).getValue(p) << " ";
 
-				string point_name = clusters[i].getPoint(j).getName();
+			// 	string point_name = clusters[i].getPoint(j).getName();
 
-				if(point_name != "")
-					out << "- " << point_name;
+			// 	if(point_name != "")
+			// 		out << "- " << point_name;
 
-				out << endl;
-			}
+			// 	out << endl;
+			// }
 
 			out << "Cluster values: ";
 

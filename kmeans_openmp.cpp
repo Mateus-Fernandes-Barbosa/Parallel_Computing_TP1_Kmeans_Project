@@ -224,6 +224,8 @@ public:
 		{
 			bool done = true;
 
+			// Paraleliza o loop distribuindo as iterações estaticamente entre as threads
+			// Usa redução lógica AND (&&) para combinar o valor de 'done' de todas as threads
 			// associates each point to the nearest center
 			#pragma omp parallel for schedule(static) reduction(&&:done)
 			for(int i = 0; i < total_points; i++)
@@ -233,6 +235,8 @@ public:
 
 				if(id_old_cluster != id_nearest_center)
 				{
+					// Região crítica: garante que apenas uma thread por vez modifique os clusters
+					// Evita condições de corrida ao adicionar/remover pontos dos clusters
 					#pragma omp critical
 					{
 						if(id_old_cluster != -1)
@@ -245,6 +249,8 @@ public:
 				}
 			}
 
+			// Paraleliza o cálculo dos novos centros dos clusters
+			// Cada thread processa um ou mais clusters independentemente
 			// recalculating the center of each cluster
 			#pragma omp parallel for schedule(static)
 			for(int i = 0; i < K; i++)
@@ -256,6 +262,8 @@ public:
 
 					if(total_points_cluster > 0)
 					{
+						// Vetorização SIMD: executa múltiplas iterações do loop simultaneamente
+						// Usa redução de soma (+) para acumular os valores em paralelo
 						#pragma omp simd reduction(+:sum)
 						for(int p = 0; p < total_points_cluster; p++)
 							sum += clusters[i].getPoint(p).getValue(j);
@@ -266,7 +274,7 @@ public:
 
 			if(done == true || iter >= max_iterations)
 			{
-				out << "Break in iteration " << iter << "\n\n";
+				// out << "Break in iteration " << iter << "\n\n";
 				break;
 			}
 
@@ -278,20 +286,20 @@ public:
 		{
 			int total_points_cluster =  clusters[i].getTotalPoints();
 
-			out << "Cluster " << clusters[i].getID() + 1 << endl;
-			for(int j = 0; j < total_points_cluster; j++)
-			{
-				out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
-				for(int p = 0; p < total_values; p++)
-					out << clusters[i].getPoint(j).getValue(p) << " ";
+			// out << "Cluster " << clusters[i].getID() + 1 << endl;
+			// for(int j = 0; j < total_points_cluster; j++)
+			// {
+			// 	out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
+			// 	for(int p = 0; p < total_values; p++)
+			// 		out << clusters[i].getPoint(j).getValue(p) << " ";
 
-				string point_name = clusters[i].getPoint(j).getName();
+			// 	string point_name = clusters[i].getPoint(j).getName();
 
-				if(point_name != "")
-					out << "- " << point_name;
+			// 	if(point_name != "")
+			// 		out << "- " << point_name;
 
-				out << endl;
-			}
+			// 	out << endl;
+			// }
 
 			out << "Cluster values: ";
 

@@ -1,13 +1,3 @@
-// Implementation of the KMeans Algorithm with MPI + OpenMP
-// Mantém a estrutura original do código sequencial/OpenMP
-// Lógica: Rank 0 (pai) coordena, ranks filhos processam suas porções
-
-// how to compile:
-// mpicxx -std=c++17 -O0 -fopenmp -o kmeans_mpi_simple kmeans_mpi_simple.cpp -lm
-
-// how to run:
-// OMP_NUM_THREADS=2 mpirun -np 4 ./kmeans_mpi_simple output.txt < input.txt
-
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -20,9 +10,7 @@
 
 using namespace std;
 
-// ========================================
-// Classes originais mantidas (Point, Cluster)
-// ========================================
+
 class Point
 {
 private:
@@ -178,13 +166,12 @@ public:
 class KMeans
 {
 private:
-	int K; // número de clusters
-	int total_values, total_points, max_iterations;
-	vector<Cluster> clusters;
+	int K; // Número de clusters
+	int total_values, total_points, max_iterations; // Parâmetros do K-means
+	vector<Cluster> clusters; //Vetor de clusters
 	int rank, num_procs; // MPI rank e número de processos
 
 	// Retorna ID do cluster mais próximo (distância euclidiana)
-	// MANTIDO IGUAL AO ORIGINAL
 	int getIDNearestCenter(Point point)
 	{
 		double sum = 0.0, min_dist;
@@ -238,14 +225,13 @@ public:
 			return;
 
 		// ========================================
-		// ETAPA 1: Rank 0 inicializa clusters
+		// Rank 0 inicializa clusters
 		// ========================================
 		if(rank == 0)
 		{
 			vector<int> prohibited_indexes;
 
-			// Escolhe K pontos distintos como centroides iniciais
-			// MANTIDO IGUAL AO ORIGINAL
+			// Escolhe K pontos distintos como centroides iniciais aleatórios
 			for(int i = 0; i < K; i++)
 			{
 				while(true)
@@ -276,22 +262,22 @@ public:
 		}
 
 		// ========================================
-		// ETAPA 2: Broadcast dos centroides iniciais
+		// Broadcast dos centroides iniciais
 		// ========================================
 		vector<double> centroids_flat(K * total_values);
 		
 		if(rank == 0)
 		{
-			// Empacota centroides em array flat
+			
 			for(int i = 0; i < K; i++)
 				for(int j = 0; j < total_values; j++)
 					centroids_flat[i * total_values + j] = clusters[i].getCentralValue(j);
 		}
 
-		// Todos os processos recebem os centroides
+		
 		MPI_Bcast(centroids_flat.data(), K * total_values, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-		// Processos filhos atualizam seus clusters com centroides recebidos
+		
 		if(rank != 0)
 		{
 			for(int i = 0; i < K; i++)
@@ -312,16 +298,16 @@ public:
 		// ========================================
 		// LOOP PRINCIPAL (iterações do K-means)
 		// ========================================
+		// Primeira iteração já contabilizada com clusters aleatórios
 		int iter = 1;
 
 		while(true)
 		{
-			int local_changes = 0; // Contador local de mudanças
+			int local_changes = 0; 
 
-			// ========================================
-			// ETAPA 4: Atribuir pontos aos clusters mais próximos
-			// (Cada processo trabalha em sua porção)
-			// ========================================
+			// ==================================================
+			// Atribuição dos pontos aos clusters mais próximos
+			// ==================================================
 			#pragma omp parallel for schedule(static) reduction(+:local_changes)
 			for(int i = my_start; i < my_start + my_count; i++)
 			{
@@ -342,15 +328,15 @@ public:
 				}
 			}
 
-			// ========================================
-			// ETAPA 5: Somar mudanças de todos os processos
-			// ========================================
+			// ===============================================================
+			// Somar mudanças de todos os processos para verificar alterações
+			// ===============================================================
 			int global_changes = 0;
 			MPI_Allreduce(&local_changes, &global_changes, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 
-			// ========================================
-			// Recalcular centroides
-			// ========================================
+			// ===============================================================
+			// Calcular novas somas locais e quantidade de pontos por cluster
+			// ===============================================================
 			vector<double> local_sums(K * total_values, 0.0);
 			vector<int> local_counts(K, 0);
 
@@ -430,23 +416,22 @@ public:
 			}
 
 			// ========================================
-			// ETAPA 10: Verificar convergência
+			// Verificação da convergência
 			// ========================================
 			if(global_changes == 0 || iter >= max_iterations)
 			{
-				if(rank == 0)
-					out << "Break in iteration " << iter << "\n\n";
+				// if(rank == 0)
+				// 	out << "Break in iteration " << iter << "\n\n"
 				break;
 			}
 
 			iter++;
 		}
 
-		// ========================================
-		// ETAPA 11: Sincronizar cluster IDs de todos os processos
-		// ========================================
+		// ======================================================================
+		// Sincronização dos pontos pertencentes a cada cluster em cada processo
+		// ======================================================================
 		
-		// Cada processo prepara seus cluster_ids locais
 		vector<int> local_cluster_ids(my_count);
 		for(int i = 0; i < my_count; i++)
 		{
@@ -465,7 +450,7 @@ public:
 			recv_displs[r] = r_start;
 		}
 		
-		// Vetor para receber todos os cluster_ids (apenas rank 0 precisa alocar)
+		// Vetor para receber todos os cluster_ids
 		vector<int> all_cluster_ids;
 		if(rank == 0)
 		{
@@ -478,11 +463,11 @@ public:
 					0, MPI_COMM_WORLD);
 		
 		// ========================================
-		// ETAPA 12: Rank 0 imprime resultados
+		// Rank 0 imprime resultados
 		// ========================================
 		if(rank == 0)
 		{
-			// Atualizar TODOS os pontos com os cluster_ids recebidos
+			
 			for(int i = 0; i < total_points; i++)
 			{
 				points[i].setCluster(all_cluster_ids[i]);
@@ -499,25 +484,24 @@ public:
 					clusters[cluster_id].addPoint(points[i]);
 			}
 
-			// Imprime resultados (MANTIDO IGUAL AO ORIGINAL)
 			for(int i = 0; i < K; i++)
 			{
 				int total_points_cluster = clusters[i].getTotalPoints();
 
-				out << "Cluster " << clusters[i].getID() + 1 << endl;
-				for(int j = 0; j < total_points_cluster; j++)
-				{
-					out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
-					for(int p = 0; p < total_values; p++)
-						out << clusters[i].getPoint(j).getValue(p) << " ";
+				// out << "Cluster " << clusters[i].getID() + 1 << endl;
+				// for(int j = 0; j < total_points_cluster; j++)
+				// {
+				// 	out << "Point " << clusters[i].getPoint(j).getID() + 1 << ": ";
+				// 	for(int p = 0; p < total_values; p++)
+				// 		out << clusters[i].getPoint(j).getValue(p) << " ";
 
-					string point_name = clusters[i].getPoint(j).getName();
+				// 	string point_name = clusters[i].getPoint(j).getName();
 
-					if(point_name != "")
-						out << "- " << point_name;
+				// 	if(point_name != "")
+				// 		out << "- " << point_name;
 
-					out << endl;
-				}
+				// 	out << endl;
+				// }
 
 				out << "Cluster values: ";
 
