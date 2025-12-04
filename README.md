@@ -1,9 +1,11 @@
-# Execução e requisitos (OpenMP + MPI)
+# Execução e requisitos (OpenMP + MPI + GPU)
 
 Projeto de programação paralela do algoritmo Kmeans. Implementações:
 - Kmeans_sequencial. [Link para o código original](https://github.com/marcoscastro/kmeans/blob/master/kmeans.cpp)
 - kmeans_openmp. Implementado somente com as diretivas do pragma openmp.
 - kmeans_mpi_openmp. Estratégia híbrida com MPI e OpenMp.
+- kmeans_openmp_GPU. Implementação com OpenMP Offloading para GPU.
+- kmeans_cuda. Implementação com CUDA para GPU (variação de threads por bloco: 128, 256, 512).
 
 ## Requisitos e instruções por sistema
 
@@ -103,3 +105,93 @@ Executar o `benchmark.sh` para compilação e testes automáticos com controle d
   mpiexec -n 4 ./kmeans_mpi_openmp < UCI_Credit_Card.txt
   ```
 </details>
+
+<details>
+<summary>Instruções para GPU (Windows)</summary>
+
+#### Requisitos:
+- Compilador: GCC (MinGW/WSL) com suporte a -fopenmp.
+- CUDA: Toolkit NVIDIA (para kmeans_cuda).
+
+#### Instalação (exemplo):
+1. Instalar [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (requer GPU NVIDIA).
+2. Adicionar `nvcc` ao PATH (geralmente: `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.x\bin`).
+3. Verificar instalação: `nvcc --version`
+
+#### Compilação:
+- OpenMP + GPU (offload):
+  ```cmd
+  g++ -std=c++17 -fopenmp -foffload=nvptx-none -o kmeans_openmp_GPU kmeans_openmp_GPU.cpp
+  ```
+- CUDA (blocos automáticos; pode variar threads via parâmetro):
+  ```cmd
+  nvcc -O0 -o kmeans_cuda kmeans_cuda.cu
+  ```
+
+#### Execução:
+- OpenMP + GPU (definir threads):
+  ```cmd
+  set OMP_NUM_THREADS=4
+  .\kmeans_openmp_GPU < UCI_Credit_Card.txt > output.txt
+  ```
+- CUDA (com variação de threads; 256 threads/bloco por padrão):
+  ```cmd
+  .\kmeans_cuda output.txt 256 < UCI_Credit_Card.txt
+  ```
+  Sintaxe: `kmeans_cuda <output> [gpu_threads] < input.txt` (blocos são calculados automaticamente)
+</details>
+
+<details>
+<summary>Instruções para GPU (Linux)</summary>
+
+#### Requisitos:
+- Compilador: GCC com suporte a -fopenmp.
+- CUDA: Toolkit NVIDIA (para kmeans_cuda).
+
+#### Instalação (exemplo):
+```bash
+sudo apt update
+# Instalar CUDA Toolkit (verificar versão específica para sua distribuição)
+sudo apt install nvidia-cuda-toolkit
+# Verificar instalação
+nvcc --version
+```
+
+#### Compilação:
+- OpenMP + GPU (offload):
+  ```bash
+  g++ -std=c++17 -fopenmp -foffload=nvptx-none -o kmeans_openmp_GPU kmeans_openmp_GPU.cpp -lm
+  ```
+- CUDA (blocos automáticos; pode variar threads via parâmetro):
+  ```bash
+  nvcc -O0 -o kmeans_cuda kmeans_cuda.cu
+  ```
+
+#### Execução:
+- OpenMP + GPU (definir threads):
+  ```bash
+  export OMP_NUM_THREADS=4
+  ./kmeans_openmp_GPU < UCI_Credit_Card.txt > output.txt
+  ```
+- CUDA (com variação de threads; 256 threads/bloco por padrão):
+  ```bash
+  ./kmeans_cuda output.txt 256 < UCI_Credit_Card.txt
+  ```
+  Sintaxe: `kmeans_cuda <output> [gpu_threads] < input.txt` (blocos são calculados automaticamente)
+</details>
+
+## Benchmark automático
+
+### Linux: benchmark.sh
+Executa todas as variações (Sequencial, OpenMP, MPI+OpenMP, OpenMP+GPU, CUDA com diferentes threads):
+```bash
+./benchmark.sh UCI_Credit_Card.txt
+```
+As thread counts CUDA testadas são: **128, 256, 512**.
+
+### Windows: benchmark.bat
+Executa variações de Sequencial, OpenMP e MPI+OpenMP:
+```cmd
+.\benchmark.bat
+```
+**Nota:** GPU não está integrada ao benchmark.bat no momento. Use comandos manuais para testar CUDA e OpenMP+GPU.

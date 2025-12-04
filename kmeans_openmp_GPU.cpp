@@ -137,6 +137,12 @@ public:
 	{
 		return id_cluster;
 	}
+
+	// Remove todos os pontos do cluster
+	void clearPoints()
+	{
+		points.clear();
+	}
 };
 
 class KMeans
@@ -224,53 +230,121 @@ public:
 		{
 			bool done = true;
 
-			// Paraleliza o loop distribuindo as iterações estaticamente entre as threads
-			// Usa redução lógica AND (&&) para combinar o valor de 'done' de todas as threads
-			// associates each point to the nearest center
-			#pragma omp parallel for schedule(static) reduction(&&:done)
+			// Versão com offload para dispositivo (GPU) usando OpenMP target.
+			// Estratégia:
+			// 1) Extrair dados para arrays planos (pontos e centros) para tornar os dados offloadable.
+			// 2) Offload: calcular, para cada ponto, o id do centro mais próximo (new_clusters).
+			// 3) Atualizar no host se houve mudança (done) e reconstruir os vetores de pontos dos clusters.
+			// 4) Offload: acumular somas por cluster (sums) e contagens (counts) usando atomic no dispositivo.
+			// 5) Atualizar centros no host com sums / counts.
+
+			// Aloca arrays planos
+			double *points_values = new double[total_points * total_values];
+			int *old_clusters = new int[total_points];
+			int *new_clusters = new int[total_points];
+			double *centers = new double[K * total_values];
+
 			for(int i = 0; i < total_points; i++)
 			{
-				int id_old_cluster = points[i].getCluster();
-				int id_nearest_center = getIDNearestCenter(points[i]);
-
-				if(id_old_cluster != id_nearest_center)
-				{
-					// Região crítica: garante que apenas uma thread por vez modifique os clusters
-					// Evita condições de corrida ao adicionar/remover pontos dos clusters
-					#pragma omp critical
-					{
-						if(id_old_cluster != -1)
-							clusters[id_old_cluster].removePoint(points[i].getID());
-
-						points[i].setCluster(id_nearest_center);
-						clusters[id_nearest_center].addPoint(points[i]);
-					}
-					done = false;
-				}
+				old_clusters[i] = points[i].getCluster();
+				for(int j = 0; j < total_values; j++)
+					points_values[i * total_values + j] = points[i].getValue(j);
 			}
 
-			// Paraleliza o cálculo dos novos centros dos clusters
-			// Cada thread processa um ou mais clusters independentemente
-			// recalculating the center of each cluster
-			#pragma omp parallel for schedule(static)
-			for(int i = 0; i < K; i++)
+			for(int c = 0; c < K; c++)
 			{
 				for(int j = 0; j < total_values; j++)
-				{
-					int total_points_cluster = clusters[i].getTotalPoints();
-					double sum = 0.0;
+					centers[c * total_values + j] = clusters[c].getCentralValue(j);
+			}
 
-					if(total_points_cluster > 0)
+			// Offload: calcula o centro mais próximo para cada ponto
+			#pragma omp target teams distribute parallel for map(to: points_values[0:total_points*total_values], centers[0:K*total_values]) map(from: new_clusters[0:total_points])
+			for(int i = 0; i < total_points; i++)
+			{
+				int best = 0;
+				double min_sum = 0.0;
+				// calcula a distância para o centro 0
+				for(int v = 0; v < total_values; v++)
+				{
+					double diff = centers[0 * total_values + v] - points_values[i * total_values + v];
+					min_sum += diff * diff;
+				}
+				for(int c = 1; c < K; c++)
+				{
+					double sum = 0.0;
+					for(int v = 0; v < total_values; v++)
 					{
-						// Vetorização SIMD: executa múltiplas iterações do loop simultaneamente
-						// Usa redução de soma (+) para acumular os valores em paralelo
-						#pragma omp simd reduction(+:sum)
-						for(int p = 0; p < total_points_cluster; p++)
-							sum += clusters[i].getPoint(p).getValue(j);
-						clusters[i].setCentralValue(j, sum / total_points_cluster);
+						double diff = centers[c * total_values + v] - points_values[i * total_values + v];
+						sum += diff * diff;
+					}
+					if(sum < min_sum)
+					{
+						min_sum = sum;
+						best = c;
+					}
+				}
+				new_clusters[i] = best;
+			}
+
+			// Atualiza done e os clusters no host
+			done = true;
+			for(int i = 0; i < total_points; i++)
+			{
+				if(old_clusters[i] != new_clusters[i])
+					done = false;
+				points[i].setCluster(new_clusters[i]);
+			}
+
+			// Reconstrói os vetores de pontos dos clusters (clear + add)
+			for(int c = 0; c < K; c++)
+				clusters[c].clearPoints();
+
+			for(int i = 0; i < total_points; i++)
+			{
+				clusters[new_clusters[i]].addPoint(points[i]);
+			}
+
+			// Offload: acumula somas por cluster para recalcular centros
+			double *sums = new double[K * total_values];
+			int *counts = new int[K];
+			// inicializa
+			for(int i = 0; i < K * total_values; i++) sums[i] = 0.0;
+			for(int i = 0; i < K; i++) counts[i] = 0;
+
+			#pragma omp target teams distribute parallel for map(to: points_values[0:total_points*total_values], new_clusters[0:total_points]) map(tofrom: sums[0:K*total_values], counts[0:K])
+			for(int i = 0; i < total_points; i++)
+			{
+				int c = new_clusters[i];
+				#pragma omp atomic
+				counts[c]++;
+				for(int v = 0; v < total_values; v++)
+				{
+					#pragma omp atomic
+					sums[c * total_values + v] += points_values[i * total_values + v];
+				}
+			}
+
+			// Atualiza centros no host
+			for(int c = 0; c < K; c++)
+			{
+				int cnt = counts[c];
+				if(cnt > 0)
+				{
+					for(int v = 0; v < total_values; v++)
+					{
+						double newc = sums[c * total_values + v] / cnt;
+						clusters[c].setCentralValue(v, newc);
 					}
 				}
 			}
+
+			// libera arrays
+			delete[] points_values;
+			delete[] old_clusters;
+			delete[] new_clusters;
+			delete[] centers;
+			delete[] sums;
+			delete[] counts;
 
 			if(done == true || iter >= max_iterations)
 			{

@@ -35,6 +35,9 @@ mkdir -p "$OUTPUT_DIR"
 # ==============================
 # OpenMP threads (apenas threads, sem MPI)
 OPENMP_THREADS=(1 2 4 8)
+# CUDA launch params to test: threads per block and explicit block counts (0 = auto compute)
+CUDA_THREADS=(2 4 8 16 32 64 128 256 512 1024)
+# explicit block counts removed; blocks are computed automatically inside the binary
 # kmeans_mpi_openmp: arrays de processos e threads para testar diferentes combinações
 MPI_OPENMP_PROCESSES=(1 1 1 2 4)
 MPI_OPENMP_THREADS=(1 2 4 2 1)
@@ -61,6 +64,12 @@ g++ -std=c++17 -O0 -fopenmp -o kmeans_openmp kmeans_openmp.cpp -lm || { echo -e 
 
 echo -e "  • ${BLUE}3) kmeans_mpi_openmp (MPI+OpenMP)${NC}"
 mpicxx -std=c++17 -O0 -fopenmp -o kmeans_mpi_openmp kmeans_mpi_openmp.cpp -lm || { echo -e "${RED}❌ Falha ao compilar kmeans_mpi_openmp.cpp${NC}"; exit 1; }
+
+echo -e "  • ${BLUE}3) kmeans_openmp_GPU (OpenMp com gpu)${NC}"
+g++ -std=c++17 -O0 -fopenmp -o kmeans_openmp_GPU kmeans_openmp_GPU.cpp -lm || { echo -e "${RED}❌ Falha ao compilar kmeans_openmp_GPU.cpp${NC}"; exit 1; }
+
+echo -e "  • ${BLUE}4) kmeans_cuda (CUDA)${NC}"
+nvcc -O0 -o kmeans_cuda kmeans_cuda.cu -arch=sm_75 || { echo -e "${RED}❌ Falha ao compilar kmeans_cuda.cu${NC}"; exit 1; }
 
 echo -e "${GREEN}   ✅ Compilação OK${NC}"
 
@@ -103,6 +112,17 @@ highlight_check() {
     fi
 }
 
+# Compara um arquivo (LABEL) com as baselines (sequencial e OpenMP 1 thread)
+check_against_baselines() {
+    local FILE=$1
+    local LABEL=$2
+    echo -e "${BLUE}• $LABEL${NC}"
+    compare_centroids "$FILE" "$SEQ_OUT"; local A=$?
+    compare_centroids "$FILE" "$OMP1_OUT"; local B=$?
+    highlight_check $A "Comparação com Sequencial"
+    highlight_check $B "Comparação com OpenMP (1 thread)"
+}
+
 # ==============================
 # Execuções
 # ==============================
@@ -143,6 +163,30 @@ for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
     echo -e "${GREEN}   ✅ Tempo: ${TTIME}s${NC}"
 done
 
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⏱️  Executando kmeans_openmp_GPU (OpenMP com GPU)...${NC}"
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+for T in "${OPENMP_THREADS[@]}"; do
+    OMP_GPU_OUT="$OUTPUT_DIR/out_openmp_GPU_${T}t.txt"
+    echo -e "${YELLOW}   🔧 ${T} thread(s)${NC}"
+    read TTIME STATUS < <(measure_time "OMP_NUM_THREADS=${T} ./kmeans_openmp_GPU \"$OMP_GPU_OUT\" < \"$INPUT_FILE\"")
+    TIMES[omp_gpu_${T}]="$TTIME"
+    if [ "$STATUS" -ne 0 ]; then echo -e "${RED}   ❌ Falha no kmeans_openmp_GPU (${T}t)${NC}"; exit 1; fi
+    echo -e "${GREEN}   ✅ Tempo: ${TTIME}s${NC}"
+done
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⏱️  Executando kmeans_cuda (GPU) com variações de threads/blocos...${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+for T in "${CUDA_THREADS[@]}"; do
+    CUDA_OUT="$OUTPUT_DIR/out_cuda_t${T}.txt"
+    echo -e "${YELLOW}   🔧 threads=${T}${NC}"
+    read TTIME STATUS < <(measure_time "./kmeans_cuda \"$CUDA_OUT\" ${T} < \"$INPUT_FILE\"")
+    TIMES[cuda_t${T}]="$TTIME"
+    if [ "$STATUS" -ne 0 ]; then echo -e "${RED}   ❌ Falha na execução kmeans_cuda (t=${T})${NC}"; exit 1; fi
+    echo -e "${GREEN}   ✅ Tempo: ${TTIME}s${NC}"
+done
+
 # ==============================
 # Verificação de corretude
 # ==============================
@@ -158,23 +202,17 @@ OMP1_OUT="$OUTPUT_DIR/out_openmp_1t.txt"
 echo -e "${BLUE}• OpenMP (1 thread) vs Sequencial${NC}"
 compare_centroids "$OMP1_OUT" "$SEQ_OUT"; highlight_check $? "Centroides idênticos (omp 1t ↔ seq)"
 
-# Função para testar um arquivo contra ambos baselines
-check_against_baselines() {
-    local FILE=$1
-    local LABEL=$2
-    echo -e "${BLUE}• $LABEL${NC}"
-    compare_centroids "$FILE" "$SEQ_OUT"; local A=$?
-    compare_centroids "$FILE" "$OMP1_OUT"; local B=$?
-    highlight_check $A "Comparação com Sequencial"
-    highlight_check $B "Comparação com OpenMP (1 thread)"
-}
-
 # Checar OpenMP: comparar todos exceto o primeiro com Sequencial e OpenMP (1 thread)
 for T in "${OPENMP_THREADS[@]:1}"; do  # pula o primeiro elemento
     check_against_baselines "$OUTPUT_DIR/out_openmp_${T}t.txt" "OpenMP (${T} threads)"
 done
 
-# Checar kmeans_mpi_openmp: comparar todas as configurações exceto a primeira  
+# Checar kmeans_openmp_GPU: comparar todas as configurações (inclui 1 thread)
+for T in "${OPENMP_THREADS[@]}"; do
+    check_against_baselines "$OUTPUT_DIR/out_openmp_GPU_${T}t.txt" "kmeans_openmp_GPU (${T} threads)"
+done
+
+# Checar kmeans_mpi_openmp: comparar todas as configurações exceto a primeira
 MPI_OPENMP_BASELINE_P=${MPI_OPENMP_PROCESSES[0]}
 MPI_OPENMP_BASELINE_T=${MPI_OPENMP_THREADS[0]}
 MPI_OPENMP_BASELINE_FILE="$OUTPUT_DIR/out_mpi_openmp_${MPI_OPENMP_BASELINE_P}p_${MPI_OPENMP_BASELINE_T}t.txt"
@@ -189,6 +227,12 @@ for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
     compare_centroids "$FILE" "$MPI_OPENMP_BASELINE_FILE"; highlight_check $? "Comparação com mpi_openmp baseline (${MPI_OPENMP_BASELINE_P}p, ${MPI_OPENMP_BASELINE_T}t)"
 done
 
+# Checar kmeans_cuda (GPU) — todas as variações geradas
+for T in "${CUDA_THREADS[@]}"; do
+    FILE="$OUTPUT_DIR/out_cuda_t${T}.txt"
+    check_against_baselines "$FILE" "kmeans_cuda (t=${T})"
+done
+
 # ==============================
 # Resumo simples de tempos
 # ==============================
@@ -200,10 +244,21 @@ for T in "${OPENMP_THREADS[@]}"; do
     printf "%-36s %s\n" "OpenMP (${T}t)" "${TIMES[omp_${T}]}"
 done
 
+# Mostrar tempos do OpenMP com GPU
+for T in "${OPENMP_THREADS[@]}"; do
+    printf "%-36s %s\n" "OpenMP+GPU (${T}t)" "${TIMES[omp_gpu_${T}]}"
+done
+
 for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
     P=${MPI_OPENMP_PROCESSES[$i]}
     T=${MPI_OPENMP_THREADS[$i]}
     printf "%-36s %s\n" "kmeans_mpi_openmp (${P}p, ${T}t)" "${TIMES[mpi_openmp_${P}p_${T}t]}"
+done
+
+# Mostrar tempos do kmeans_cuda (t,b)
+for T in "${CUDA_THREADS[@]}"; do
+    key="cuda_t${T}"
+    printf "%-36s %s\n" "kmeans_cuda (t=${T})" "${TIMES[$key]}"
 done
 
 # ==============================
@@ -230,12 +285,26 @@ for T in "${OPENMP_THREADS[@]}"; do
     if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="OpenMP (${T} threads)"; fi
 done
 
+# Speedup para OpenMP com GPU
+for T in "${OPENMP_THREADS[@]}"; do
+    sp=$(calc_speedup "$SEQ_T" "${TIMES[omp_gpu_${T}]}")
+    printf "%-36s %s\n" "OpenMP+GPU (${T} threads)" "${sp}x"
+    if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="OpenMP+GPU (${T} threads)"; fi
+done
+
 for i in "${!MPI_OPENMP_PROCESSES[@]}"; do
     P=${MPI_OPENMP_PROCESSES[$i]}
     T=${MPI_OPENMP_THREADS[$i]}
     sp=$(calc_speedup "$SEQ_T" "${TIMES[mpi_openmp_${P}p_${T}t]}")
     printf "%-36s %s\n" "kmeans_mpi_openmp (${P}p, ${T}t)" "${sp}x"
     if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="kmeans_mpi_openmp (${P}p, ${T}t)"; fi
+done
+
+for T in "${CUDA_THREADS[@]}"; do
+    key="cuda_t${T}"
+    sp=$(calc_speedup "$SEQ_T" "${TIMES[$key]}")
+    printf "%-36s %s\n" "kmeans_cuda (t=${T})" "${sp}x"
+    if [ "$sp" != "-" ] && echo "$sp > $best_speed" | bc -l >/dev/null 2>&1; then best_speed=$sp; best_label="kmeans_cuda (t=${T})"; fi
 done
 
 echo -e "\n${BLUE}🏆 Melhor resultado:${NC} ${GREEN}${best_speed}x${NC} com ${YELLOW}${best_label}${NC}"
